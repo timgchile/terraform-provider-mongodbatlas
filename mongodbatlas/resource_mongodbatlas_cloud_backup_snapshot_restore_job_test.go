@@ -51,6 +51,36 @@ func TestAccResourceMongoDBAtlasCloudBackupSnapshotRestoreJob_basic(t *testing.T
 	})
 }
 
+func TestAccResourceMongoDBAtlasCloudBackupSnapshotRestoreJob_basicServerless(t *testing.T) {
+	var (
+		cloudBackupSnapshotRestoreJob = matlas.CloudProviderSnapshotRestoreJob{}
+		resourceName                  = "mongodbatlas_serverless_instance.my_cluster"
+		projectID                     = os.Getenv("MONGODB_ATLAS_PROJECT_ID")
+		clusterName                   = fmt.Sprintf("test-acc-%s", acctest.RandString(10))
+		description                   = fmt.Sprintf("My description in %s", clusterName)
+		retentionInDays               = "1"
+		targetClusterName             = clusterName
+		targetGroupID                 = os.Getenv("MONGODB_ATLAS_PROJECT_ID")
+	)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:          func() { testAccPreCheck(t) },
+		ProviderFactories: testAccProviderFactories,
+		CheckDestroy:      testAccCheckMongoDBAtlasCloudBackupSnapshotRestoreJobDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccMongoDBAtlasCloudBackupSnapshotRestoreJobConfigAutomatedServerless(projectID, clusterName, description, retentionInDays, targetClusterName, targetGroupID),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckMongoDBAtlasCloudBackupSnapshotRestoreJobExists(resourceName, &cloudBackupSnapshotRestoreJob),
+					testAccCheckMongoDBAtlasCloudBackupSnapshotRestoreJobAttributes(&cloudBackupSnapshotRestoreJob, "automated"),
+					resource.TestCheckResourceAttr(resourceName, "delivery_type_config.0.target_cluster_name", targetClusterName),
+					resource.TestCheckResourceAttr(resourceName, "delivery_type_config.0.target_project_id", targetGroupID),
+				),
+			},
+		},
+	})
+}
+
 func TestAccResourceMongoDBAtlasCloudBackupSnapshotRestoreJob_importBasic(t *testing.T) {
 	var (
 		resourceName      = "mongodbatlas_cloud_backup_snapshot_restore_job.test"
@@ -122,13 +152,23 @@ func testAccCheckMongoDBAtlasCloudBackupSnapshotRestoreJobExists(resourceName st
 
 		log.Printf("[DEBUG] cloudBackupSnapshotRestoreJob ID: %s", rs.Primary.Attributes["snapshot_restore_job_id"])
 
+		deploymentType := ids["deployment_type"]
 		requestParameters := &matlas.SnapshotReqPathParameters{
-			GroupID:     ids["project_id"],
-			ClusterName: ids["cluster_name"],
-			JobID:       ids["snapshot_restore_job_id"],
+			GroupID:      ids["project_id"],
+			ClusterName:  ids["cluster_name"],
+			RestoreJobID: ids["snapshot_restore_job_id"],
 		}
 
-		if snapshotRes, _, err := conn.CloudProviderSnapshotRestoreJobs.Get(context.Background(), requestParameters); err == nil {
+		snapshotRes := &matlas.CloudProviderSnapshotRestoreJob{}
+		var err error
+		switch deploymentType {
+		case "SERVERLESS":
+			snapshotRes, _, err = conn.CloudProviderSnapshotRestoreJobs.GetForServerlessBackupRestore(context.Background(), requestParameters.GroupID, requestParameters.ClusterName, requestParameters.RestoreJobID)
+		default:
+			snapshotRes, _, err = conn.CloudProviderSnapshotRestoreJobs.Get(context.Background(), requestParameters)
+		}
+
+		if err == nil {
 			*cloudBackupSnapshotRestoreJob = *snapshotRes
 			return nil
 		}
@@ -179,7 +219,7 @@ func testAccCheckMongoDBAtlasCloudBackupSnapshotRestoreJobImportStateIDFunc(reso
 			return "", fmt.Errorf("not found:: %s", resourceName)
 		}
 
-		return fmt.Sprintf("%s-%s-%s", rs.Primary.Attributes["project_id"], rs.Primary.Attributes["cluster_name"], rs.Primary.Attributes["snapshot_restore_job_id"]), nil
+		return fmt.Sprintf("%s-%s-%s-%s", rs.Primary.Attributes["project_id"], rs.Primary.Attributes["cluster_name"], rs.Primary.Attributes["snapshot_restore_job_id"], rs.Primary.Attributes["deployment_type"]), nil
 	}
 }
 
@@ -297,4 +337,36 @@ resource "mongodbatlas_cloud_backup_snapshot_restore_job" "test" {
   }
 }
 	`, projectID, clusterName, description, retentionInDays, targetGroupID, pointTimeUTC)
+}
+
+func testAccMongoDBAtlasCloudBackupSnapshotRestoreJobConfigAutomatedServerless(projectID, clusterName, description, retentionInDays, targetClusterName, targetGroupID string) string {
+	return fmt.Sprintf(`
+resource "mongodbatlas_serverless_instance" "my_cluster" {
+ project_id   = "%[1]s"
+ name         = "%[2]s"
+			
+ provider_settings_backing_provider_name = "AWS"
+ provider_settings_provider_name = "SERVERLESS"
+ provider_settings_region_name = "US_EAST_1"
+}
+
+resource "mongodbatlas_cloud_backup_snapshot" "test" {
+  project_id        = mongodbatlas_serverless_instance.my_cluster.project_id
+  cluster_name      = mongodbatlas_serverless_instance.my_cluster.name
+  description       = %[3]q
+  retention_in_days = %[4]q
+}
+
+resource "mongodbatlas_cloud_backup_snapshot_restore_job" "test" {
+  project_id      = mongodbatlas_cloud_backup_snapshot.test.project_id
+  cluster_name    = mongodbatlas_cloud_backup_snapshot.test.cluster_name
+  snapshot_id     = mongodbatlas_cloud_backup_snapshot.test.id
+  deployment_type = "SERVERLESS"
+  delivery_type_config   {
+    automated           = true
+    target_cluster_name = %[5]q
+    target_project_id   = %[6]q
+  }
+}
+	`, projectID, clusterName, description, retentionInDays, targetClusterName, targetGroupID)
 }

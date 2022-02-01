@@ -117,6 +117,12 @@ func resourceMongoDBAtlasCloudBackupSnapshot() *schema.Resource {
 					Type: schema.TypeString,
 				},
 			},
+			"deployment_type": {
+				Type:     schema.TypeString,
+				Optional: true,
+				Default:  true,
+				ForceNew: true,
+			},
 		},
 	}
 }
@@ -125,21 +131,33 @@ func resourceMongoDBAtlasCloudBackupSnapshotRead(ctx context.Context, d *schema.
 	// Get client connection.
 	conn := meta.(*MongoDBClient).Atlas
 	ids := decodeStateID(d.Id())
+	deploymentType := ids["deployment_type"]
 
 	requestParameters := &matlas.SnapshotReqPathParameters{
-		SnapshotID:  ids["snapshot_id"],
-		GroupID:     ids["project_id"],
-		ClusterName: ids["cluster_name"],
+		SnapshotID: ids["snapshot_id"],
+		GroupID:    ids["project_id"],
 	}
 
-	snapshot, resp, err := conn.CloudProviderSnapshots.GetOneCloudProviderSnapshot(context.Background(), requestParameters)
+	snapshot := &matlas.CloudProviderSnapshot{}
+	resp := &matlas.Response{}
+	var err error
+
+	switch deploymentType {
+	case "SERVERLESS":
+		requestParameters.InstanceName = ids["cluster_name"]
+		snapshot, resp, err = conn.CloudProviderSnapshots.GetOneServerlessSnapshot(ctx, requestParameters)
+	default:
+		requestParameters.ClusterName = ids["cluster_name"]
+		snapshot, resp, err = conn.CloudProviderSnapshots.GetOneCloudProviderSnapshot(ctx, requestParameters)
+	}
+
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
 			d.SetId("")
 			return nil
 		}
 
-		return diag.FromErr(fmt.Errorf("error getting snapshot Information: %s", err))
+		return diag.Errorf("error getting snapshot Information: %s", err)
 	}
 
 	if err = d.Set("snapshot_id", snapshot.ID); err != nil {
@@ -200,6 +218,7 @@ func resourceMongoDBAtlasCloudBackupSnapshotRead(ctx context.Context, d *schema.
 func resourceMongoDBAtlasCloudBackupSnapshotCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	// Get client connection.
 	conn := meta.(*MongoDBClient).Atlas
+	deploymentType := d.Get("deployment_type").(string)
 
 	requestParameters := &matlas.SnapshotReqPathParameters{
 		GroupID:     d.Get("project_id").(string),
@@ -214,10 +233,16 @@ func resourceMongoDBAtlasCloudBackupSnapshotCreate(ctx context.Context, d *schem
 	stateConf := &resource.StateChangeConf{
 		Pending:    []string{"CREATING", "UPDATING", "REPAIRING", "REPEATING"},
 		Target:     []string{"IDLE"},
-		Refresh:    resourceClusterRefreshFunc(ctx, d.Get("cluster_name").(string), d.Get("project_id").(string), conn),
 		Timeout:    10 * time.Minute,
 		MinTimeout: 10 * time.Second,
 		Delay:      3 * time.Minute,
+	}
+
+	switch deploymentType {
+	case "SERVERLESS":
+		stateConf.Refresh = resourceServerlessInstanceRefreshFunc(ctx, d.Get("cluster_name").(string), d.Get("project_id").(string), conn)
+	default:
+		stateConf.Refresh = resourceClusterRefreshFunc(ctx, d.Get("cluster_name").(string), d.Get("project_id").(string), conn)
 	}
 
 	// Wait, catching any errors
@@ -236,7 +261,7 @@ func resourceMongoDBAtlasCloudBackupSnapshotCreate(ctx context.Context, d *schem
 	stateConf = &resource.StateChangeConf{
 		Pending:    []string{"queued", "inProgress"},
 		Target:     []string{"completed", "failed"},
-		Refresh:    resourceCloudBackupSnapshotRefreshFunc(ctx, requestParameters, conn),
+		Refresh:    resourceCloudBackupSnapshotRefreshFunc(ctx, requestParameters, conn, deploymentType),
 		Timeout:    1 * time.Hour,
 		MinTimeout: 60 * time.Second,
 		Delay:      1 * time.Minute,
@@ -249,9 +274,10 @@ func resourceMongoDBAtlasCloudBackupSnapshotCreate(ctx context.Context, d *schem
 	}
 
 	d.SetId(encodeStateID(map[string]string{
-		"project_id":   d.Get("project_id").(string),
-		"cluster_name": d.Get("cluster_name").(string),
-		"snapshot_id":  snapshot.ID,
+		"project_id":      d.Get("project_id").(string),
+		"cluster_name":    d.Get("cluster_name").(string),
+		"snapshot_id":     snapshot.ID,
+		"deployment_type": d.Get("deployment_type").(string),
 	}))
 
 	return resourceMongoDBAtlasCloudBackupSnapshotRead(ctx, d, meta)
@@ -276,9 +302,21 @@ func resourceMongoDBAtlasCloudBackupSnapshotDelete(ctx context.Context, d *schem
 	return nil
 }
 
-func resourceCloudBackupSnapshotRefreshFunc(ctx context.Context, requestParameters *matlas.SnapshotReqPathParameters, client *matlas.Client) resource.StateRefreshFunc {
+func resourceCloudBackupSnapshotRefreshFunc(ctx context.Context, requestParameters *matlas.SnapshotReqPathParameters, client *matlas.Client, deploymentType string) resource.StateRefreshFunc {
 	return func() (interface{}, string, error) {
-		c, resp, err := client.CloudProviderSnapshots.GetOneCloudProviderSnapshot(ctx, requestParameters)
+
+		c := &matlas.CloudProviderSnapshot{}
+		resp := &matlas.Response{}
+		var err error
+
+		switch deploymentType {
+		case "SERVERLESS":
+			requestParameters.InstanceName = requestParameters.ClusterName
+			requestParameters.ClusterName = ""
+			c, resp, err = client.CloudProviderSnapshots.GetOneServerlessSnapshot(ctx, requestParameters)
+		default:
+			c, resp, err = client.CloudProviderSnapshots.GetOneCloudProviderSnapshot(ctx, requestParameters)
+		}
 
 		switch {
 		case err != nil:
@@ -300,20 +338,29 @@ func resourceCloudBackupSnapshotRefreshFunc(ctx context.Context, requestParamete
 func resourceMongoDBAtlasCloudBackupSnapshotImportState(ctx context.Context, d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
 	conn := meta.(*MongoDBClient).Atlas
 
-	requestParameters, err := splitSnapshotImportID(d.Id())
+	requestParameters, deploymentType, err := splitSnapshotImportID(d.Id())
 	if err != nil {
 		return nil, err
 	}
 
-	u, _, err := conn.CloudProviderSnapshots.GetOneCloudProviderSnapshot(ctx, requestParameters)
+	u := &matlas.CloudProviderSnapshot{}
+
+	switch deploymentType {
+	case "SERVERLESS":
+		u, _, err = conn.CloudProviderSnapshots.GetOneServerlessSnapshot(ctx, requestParameters)
+	default:
+		u, _, err = conn.CloudProviderSnapshots.GetOneCloudProviderSnapshot(ctx, requestParameters)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("couldn't import snapshot %s in project %s, error: %s", requestParameters.ClusterName, requestParameters.GroupID, err)
 	}
 
 	d.SetId(encodeStateID(map[string]string{
-		"project_id":   requestParameters.GroupID,
-		"cluster_name": requestParameters.ClusterName,
-		"snapshot_id":  requestParameters.SnapshotID,
+		"project_id":      requestParameters.GroupID,
+		"cluster_name":    requestParameters.ClusterName,
+		"snapshot_id":     requestParameters.SnapshotID,
+		"deployment_type": deploymentType,
 	}))
 
 	if err := d.Set("project_id", requestParameters.GroupID); err != nil {
@@ -328,23 +375,27 @@ func resourceMongoDBAtlasCloudBackupSnapshotImportState(ctx context.Context, d *
 		log.Printf("[WARN] Error setting description for (%s): %s", requestParameters.SnapshotID, err)
 	}
 
+	if err := d.Set("deployment_type", deploymentType); err != nil {
+		log.Printf("[WARN] Error setting description for (%s): %s", deploymentType, err)
+	}
+
 	return []*schema.ResourceData{d}, nil
 }
 
-func splitSnapshotImportID(id string) (*matlas.SnapshotReqPathParameters, error) {
-	var re = regexp.MustCompile(`(?s)^([0-9a-fA-F]{24})-(.*)-([0-9a-fA-F]{24})$`)
+func splitSnapshotImportID(id string) (*matlas.SnapshotReqPathParameters, string, error) {
+	var re = regexp.MustCompile(`(?s)^([0-9a-fA-F]{24})-(.*)-([0-9a-fA-F]{24})-(.*)$`)
 
 	parts := re.FindStringSubmatch(id)
 
-	if len(parts) != 4 {
-		return nil, errors.New("import format error: to import a snapshot, use the format {project_id}-{cluster_name}-{snapshot_id}")
+	if len(parts) != 5 {
+		return nil, "", errors.New("import format error: to import a snapshot, use the format {project_id}-{cluster_name}-{snapshot_id}-{deployment_type}")
 	}
 
 	return &matlas.SnapshotReqPathParameters{
 		GroupID:     parts[1],
 		ClusterName: parts[2],
 		SnapshotID:  parts[3],
-	}, nil
+	}, parts[4], nil
 }
 
 func flattenCloudMember(apiObject *matlas.Member) map[string]interface{} {

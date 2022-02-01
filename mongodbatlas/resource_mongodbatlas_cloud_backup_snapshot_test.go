@@ -51,6 +51,43 @@ func TestAccResourceMongoDBAtlasCloudBackupSnapshot_basic(t *testing.T) {
 	})
 }
 
+func TestAccResourceMongoDBAtlasCloudBackupSnapshot_basicServerless(t *testing.T) {
+	var (
+		cloudBackupSnapshot = matlas.CloudProviderSnapshot{}
+		resourceName        = "mongodbatlas_cloud_backup_snapshot.test"
+		projectID           = os.Getenv("MONGODB_ATLAS_PROJECT_ID")
+		clusterName         = fmt.Sprintf("test-acc-%s", acctest.RandString(10))
+		description         = "My description in my cluster"
+		retentionInDays     = "4"
+	)
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:          func() { testAccPreCheck(t) },
+		ProviderFactories: testAccProviderFactories,
+		CheckDestroy:      testAccCheckMongoDBAtlasCloudBackupSnapshotDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccMongoDBAtlasCloudBackupSnapshotConfigServerless(projectID, clusterName, description, retentionInDays),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckMongoDBAtlasCloudBackupSnapshotExists(resourceName, &cloudBackupSnapshot),
+					testAccCheckMongoDBAtlasCloudBackupSnapshotAttributes(&cloudBackupSnapshot, description),
+					resource.TestCheckResourceAttr(resourceName, "project_id", projectID),
+					resource.TestCheckResourceAttr(resourceName, "cluster_name", clusterName),
+					resource.TestCheckResourceAttr(resourceName, "description", description),
+					resource.TestCheckResourceAttr(resourceName, "retention_in_days", retentionInDays),
+				),
+			},
+			{
+				ResourceName:            resourceName,
+				ImportStateIdFunc:       testAccCheckMongoDBAtlasCloudBackupSnapshotImportStateIDFunc(resourceName),
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"retention_in_days"},
+			},
+		},
+	})
+}
+
 func testAccCheckMongoDBAtlasCloudBackupSnapshotExists(resourceName string, cloudBackupSnapshot *matlas.CloudProviderSnapshot) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		conn := testAccProvider.Meta().(*MongoDBClient).Atlas
@@ -74,7 +111,19 @@ func testAccCheckMongoDBAtlasCloudBackupSnapshotExists(resourceName string, clou
 			ClusterName: ids["cluster_name"],
 		}
 
-		res, _, err := conn.CloudProviderSnapshots.GetOneCloudProviderSnapshot(context.Background(), requestParameters)
+		res := &matlas.CloudProviderSnapshot{}
+		deploymentType := ids["deployment_type"]
+		var err error
+
+		switch deploymentType {
+		case "SERVERLESS":
+			requestParameters.InstanceName = ids["cluster_name"]
+			res, _, err = conn.CloudProviderSnapshots.GetOneServerlessSnapshot(context.Background(), requestParameters)
+		default:
+			requestParameters.ClusterName = ids["cluster_name"]
+			res, _, err = conn.CloudProviderSnapshots.GetOneCloudProviderSnapshot(context.Background(), requestParameters)
+		}
+
 		if err == nil {
 			*cloudBackupSnapshot = *res
 			return nil
@@ -105,12 +154,21 @@ func testAccCheckMongoDBAtlasCloudBackupSnapshotDestroy(s *terraform.State) erro
 		ids := decodeStateID(rs.Primary.ID)
 
 		requestParameters := &matlas.SnapshotReqPathParameters{
-			SnapshotID:  ids["snapshot_id"],
-			GroupID:     ids["project_id"],
-			ClusterName: ids["cluster_name"],
+			SnapshotID: ids["snapshot_id"],
+			GroupID:    ids["project_id"],
 		}
 
-		res, _, _ := conn.CloudProviderSnapshots.GetOneCloudProviderSnapshot(context.Background(), requestParameters)
+		res := &matlas.CloudProviderSnapshot{}
+		deploymentType := ids["deployment_type"]
+
+		switch deploymentType {
+		case "SERVERLESS":
+			requestParameters.InstanceName = ids["cluster_name"]
+			res, _, _ = conn.CloudProviderSnapshots.GetOneServerlessSnapshot(context.Background(), requestParameters)
+		default:
+			requestParameters.ClusterName = ids["cluster_name"]
+			res, _, _ = conn.CloudProviderSnapshots.GetOneCloudProviderSnapshot(context.Background(), requestParameters)
+		}
 
 		if res != nil {
 			return fmt.Errorf("cloudBackupSnapshot (%s) still exists", rs.Primary.Attributes["snapshot_id"])
@@ -127,7 +185,7 @@ func testAccCheckMongoDBAtlasCloudBackupSnapshotImportStateIDFunc(resourceName s
 			return "", fmt.Errorf("not found: %s", resourceName)
 		}
 
-		return fmt.Sprintf("%s-%s-%s", rs.Primary.Attributes["project_id"], rs.Primary.Attributes["cluster_name"], rs.Primary.Attributes["snapshot_id"]), nil
+		return fmt.Sprintf("%s-%s-%s-%s", rs.Primary.Attributes["project_id"], rs.Primary.Attributes["cluster_name"], rs.Primary.Attributes["snapshot_id"], rs.Primary.Attributes["deployment_type"]), nil
 	}
 }
 
@@ -154,8 +212,29 @@ resource "mongodbatlas_cloud_backup_snapshot" "test" {
 	`, projectID, clusterName, description, retentionInDays)
 }
 
+func testAccMongoDBAtlasCloudBackupSnapshotConfigServerless(projectID, clusterName, description, retentionInDays string) string {
+	return fmt.Sprintf(`
+resource "mongodbatlas_serverless_instance" "my_cluster" {
+ project_id   = "%[1]s"
+ name         = "%[2]s"
+			
+ provider_settings_backing_provider_name = "AWS"
+ provider_settings_provider_name = "SERVERLESS"
+ provider_settings_region_name = "US_EAST_1"
+}
+
+resource "mongodbatlas_cloud_backup_snapshot" "test" {
+  project_id        = mongodbatlas_serverless_instance.my_cluster.project_id
+  cluster_name      = mongodbatlas_serverless_instance.my_cluster.name
+  description       = %[3]q
+  retention_in_days = %[4]q
+  deployment_type = "SERVERLESS"
+}
+	`, projectID, clusterName, description, retentionInDays)
+}
+
 func TestResourceMongoDBAtlasCloudBackupSnapshot_snapshotID(t *testing.T) {
-	got, err := splitSnapshotImportID("5cf5a45a9ccf6400e60981b6-projectname-environment-mongo-global-cluster-5cf5a45a9ccf6400e60981b7")
+	got, _, err := splitSnapshotImportID("5cf5a45a9ccf6400e60981b6-projectname-environment-mongo-global-cluster-5cf5a45a9ccf6400e60981b7")
 	if err != nil {
 		t.Errorf("splitSnapshotImportID returned error(%s), expected error=nil", err)
 	}
@@ -170,7 +249,7 @@ func TestResourceMongoDBAtlasCloudBackupSnapshot_snapshotID(t *testing.T) {
 		t.Errorf("Bad splitSnapshotImportID return \n got = %#v\nwant = %#v \ndiff = %#v", expected, *got, diff)
 	}
 
-	if _, err := splitSnapshotImportID("5cf5a45a9ccf6400e60981b6projectname-environment-mongo-global-cluster5cf5a45a9ccf6400e60981b7"); err == nil {
+	if _, _, err := splitSnapshotImportID("5cf5a45a9ccf6400e60981b6projectname-environment-mongo-global-cluster5cf5a45a9ccf6400e60981b7"); err == nil {
 		t.Error("splitSnapshotImportID expected to have error")
 	}
 }

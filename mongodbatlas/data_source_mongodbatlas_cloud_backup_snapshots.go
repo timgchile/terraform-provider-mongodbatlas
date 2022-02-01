@@ -117,6 +117,11 @@ func dataSourceMongoDBAtlasCloudBackupSnapshots() *schema.Resource {
 				Type:     schema.TypeInt,
 				Computed: true,
 			},
+			"deployment_type": {
+				Type:     schema.TypeString,
+				Optional: true,
+				Default:  "DEDICATED",
+			},
 		},
 	}
 }
@@ -125,16 +130,28 @@ func dataSourceMongoDBAtlasCloudBackupSnapshotsRead(ctx context.Context, d *sche
 	// Get client connection.
 	conn := meta.(*MongoDBClient).Atlas
 
+	deploymentType := d.Get("deployment_type").(string)
+
 	requestParameters := &matlas.SnapshotReqPathParameters{
-		GroupID:     d.Get("project_id").(string),
-		ClusterName: d.Get("cluster_name").(string),
+		GroupID: d.Get("project_id").(string),
 	}
 	options := &matlas.ListOptions{
 		PageNum:      d.Get("page_num").(int),
 		ItemsPerPage: d.Get("items_per_page").(int),
 	}
 
-	cloudProviderSnapshots, _, err := conn.CloudProviderSnapshots.GetAllCloudProviderSnapshots(ctx, requestParameters, options)
+	cloudProviderSnapshots := &matlas.CloudProviderSnapshots{}
+	var err error
+
+	switch deploymentType {
+	case "SERVERLESS":
+		requestParameters.InstanceName = d.Get("cluster_name").(string)
+		cloudProviderSnapshots, _, err = conn.CloudProviderSnapshots.GetAllServerlessSnapshots(ctx, requestParameters, options)
+	default:
+		requestParameters.ClusterName = d.Get("cluster_name").(string)
+		cloudProviderSnapshots, _, err = conn.CloudProviderSnapshots.GetAllCloudProviderSnapshots(ctx, requestParameters, options)
+	}
+
 	if err != nil {
 		return diag.FromErr(fmt.Errorf("error getting cloudProviderSnapshots information: %s", err))
 	}

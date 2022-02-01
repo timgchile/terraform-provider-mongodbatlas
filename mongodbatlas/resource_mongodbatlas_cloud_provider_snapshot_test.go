@@ -176,7 +176,7 @@ func testAccMongoDBAtlasCloudProviderSnapshotConfig(projectID, clusterName, desc
 }
 
 func TestResourceMongoDBAtlasCloudProviderSnapshot_snapshotID(t *testing.T) {
-	got, err := splitSnapshotImportID("5cf5a45a9ccf6400e60981b6-projectname-environment-mongo-global-cluster-5cf5a45a9ccf6400e60981b7")
+	got, _, err := splitSnapshotImportID("5cf5a45a9ccf6400e60981b6-projectname-environment-mongo-global-cluster-5cf5a45a9ccf6400e60981b7")
 	if err != nil {
 		t.Errorf("splitSnapshotImportID returned error(%s), expected error=nil", err)
 	}
@@ -191,7 +191,7 @@ func TestResourceMongoDBAtlasCloudProviderSnapshot_snapshotID(t *testing.T) {
 		t.Errorf("Bad splitSnapshotImportID return \n got = %#v\nwant = %#v \ndiff = %#v", expected, *got, diff)
 	}
 
-	if _, err := splitSnapshotImportID("5cf5a45a9ccf6400e60981b6projectname-environment-mongo-global-cluster5cf5a45a9ccf6400e60981b7"); err == nil {
+	if _, _, err := splitSnapshotImportID("5cf5a45a9ccf6400e60981b6projectname-environment-mongo-global-cluster5cf5a45a9ccf6400e60981b7"); err == nil {
 		t.Error("splitSnapshotImportID expected to have error")
 	}
 }

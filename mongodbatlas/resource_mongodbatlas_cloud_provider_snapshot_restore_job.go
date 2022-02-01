@@ -7,10 +7,8 @@ import (
 	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/spf13/cast"
-
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-
+	"github.com/spf13/cast"
 	matlas "go.mongodb.org/atlas/mongodbatlas"
 )
 
@@ -334,11 +332,11 @@ func resourceMongoDBAtlasCloudProviderSnapshotRestoreJobDelete(ctx context.Conte
 func resourceMongoDBAtlasCloudProviderSnapshotRestoreJobImportState(ctx context.Context, d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
 	conn := meta.(*MongoDBClient).Atlas
 
-	projectID, clusterName, snapshotJobID, err := splitSnapshotRestoreJobImportID(d.Id())
+	projectID, clusterName, snapshotJobID, deploymentType, err := splitSnapshotRestoreJobImportID(d.Id())
 	if err != nil {
 		return nil, err
 	}
-
+	_ = deploymentType
 	requestParameters := &matlas.SnapshotReqPathParameters{
 		GroupID:     *projectID,
 		ClusterName: *clusterName,

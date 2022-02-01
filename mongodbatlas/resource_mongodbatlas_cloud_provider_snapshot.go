@@ -10,7 +10,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-
 	matlas "go.mongodb.org/atlas/mongodbatlas"
 )
 
@@ -260,7 +259,7 @@ func resourceCloudProviderSnapshotRefreshFunc(ctx context.Context, requestParame
 func resourceMongoDBAtlasCloudProviderSnapshotImportState(ctx context.Context, d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
 	conn := meta.(*MongoDBClient).Atlas
 
-	requestParameters, err := splitSnapshotImportID(d.Id())
+	requestParameters, _, err := splitSnapshotImportID(d.Id())
 	if err != nil {
 		return nil, err
 	}

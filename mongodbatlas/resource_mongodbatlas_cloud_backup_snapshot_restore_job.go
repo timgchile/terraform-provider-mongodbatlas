@@ -186,6 +186,12 @@ func resourceMongoDBAtlasCloudBackupSnapshotRestoreJob() *schema.Resource {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
+			"deployment_type": {
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
+				Default:  "DEDICATED",
+			},
 		},
 	}
 }
@@ -193,6 +199,9 @@ func resourceMongoDBAtlasCloudBackupSnapshotRestoreJob() *schema.Resource {
 func resourceMongoDBAtlasCloudBackupSnapshotRestoreJobCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	// Get client connection.
 	conn := meta.(*MongoDBClient).Atlas
+	deploymentType := d.Get("deployment_type").(string)
+	projectID := d.Get("project_id").(string)
+	clusterName := d.Get("cluster_name").(string)
 
 	requestParameters := &matlas.SnapshotReqPathParameters{
 		GroupID:     d.Get("project_id").(string),
@@ -227,8 +236,17 @@ func resourceMongoDBAtlasCloudBackupSnapshotRestoreJobCreate(ctx context.Context
 		}
 	}
 
-	cloudProviderSnapshotRestoreJob, _, err := conn.CloudProviderSnapshotRestoreJobs.Create(ctx, requestParameters, snapshotReq)
-	if err != nil {
+	cloudProviderSnapshotRestoreJob := &matlas.CloudProviderSnapshotRestoreJob{}
+	var createErr error
+
+	switch deploymentType {
+	case "SERVERLESS":
+		cloudProviderSnapshotRestoreJob, _, createErr = conn.CloudProviderSnapshotRestoreJobs.CreateForServerlessBackupRestore(ctx, projectID, clusterName, snapshotReq)
+	default:
+		cloudProviderSnapshotRestoreJob, _, createErr = conn.CloudProviderSnapshotRestoreJobs.Create(ctx, requestParameters, snapshotReq)
+	}
+
+	if createErr != nil {
 		return diag.FromErr(fmt.Errorf("error restore a snapshot: %s", err))
 	}
 
@@ -236,6 +254,7 @@ func resourceMongoDBAtlasCloudBackupSnapshotRestoreJobCreate(ctx context.Context
 		"project_id":              d.Get("project_id").(string),
 		"cluster_name":            d.Get("cluster_name").(string),
 		"snapshot_restore_job_id": cloudProviderSnapshotRestoreJob.ID,
+		"deployment_type":         d.Get("deployment_type").(string),
 	}))
 
 	return resourceMongoDBAtlasCloudBackupSnapshotRestoreJobRead(ctx, d, meta)
@@ -245,52 +264,65 @@ func resourceMongoDBAtlasCloudBackupSnapshotRestoreJobRead(ctx context.Context, 
 	// Get client connection.
 	conn := meta.(*MongoDBClient).Atlas
 	ids := decodeStateID(d.Id())
+	deploymentType := d.Get("deployment_type").(string)
+	projectID := d.Get("project_id").(string)
+	clusterName := d.Get("cluster_name").(string)
 
 	requestParameters := &matlas.SnapshotReqPathParameters{
-		JobID:       ids["snapshot_restore_job_id"],
-		GroupID:     ids["project_id"],
-		ClusterName: ids["cluster_name"],
+		RestoreJobID: ids["snapshot_restore_job_id"],
+		GroupID:      ids["project_id"],
+		ClusterName:  ids["cluster_name"],
 	}
 
-	snapshotReq, resp, err := conn.CloudProviderSnapshotRestoreJobs.Get(context.Background(), requestParameters)
-	if err != nil {
+	snapshotReq := &matlas.CloudProviderSnapshotRestoreJob{}
+	resp := &matlas.Response{}
+	var createErr error
+
+	switch deploymentType {
+	case "SERVERLESS":
+		snapshotReq, resp, createErr = conn.CloudProviderSnapshotRestoreJobs.GetForServerlessBackupRestore(ctx, projectID, clusterName, requestParameters.JobID)
+	default:
+		snapshotReq, resp, createErr = conn.CloudProviderSnapshotRestoreJobs.Get(ctx, requestParameters)
+	}
+
+	if createErr != nil {
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
 			d.SetId("")
 			return nil
 		}
 
-		return diag.FromErr(fmt.Errorf("error getting cloudProviderSnapshotRestoreJob Information: %s", err))
+		return diag.Errorf("error getting cloudProviderSnapshotRestoreJob Information: %s", createErr)
 	}
 
-	if err = d.Set("delivery_url", snapshotReq.DeliveryURL); err != nil {
+	if err := d.Set("delivery_url", snapshotReq.DeliveryURL); err != nil {
 		return diag.FromErr(fmt.Errorf("error setting `delivery_url` for cloudProviderSnapshotRestoreJob (%s): %s", ids["snapshot_restore_job_id"], err))
 	}
 
-	if err = d.Set("cancelled", snapshotReq.Cancelled); err != nil {
+	if err := d.Set("cancelled", snapshotReq.Cancelled); err != nil {
 		return diag.FromErr(fmt.Errorf("error setting `cancelled` for cloudProviderSnapshotRestoreJob (%s): %s", ids["snapshot_restore_job_id"], err))
 	}
 
-	if err = d.Set("created_at", snapshotReq.CreatedAt); err != nil {
+	if err := d.Set("created_at", snapshotReq.CreatedAt); err != nil {
 		return diag.FromErr(fmt.Errorf("error setting `created_at` for cloudProviderSnapshotRestoreJob (%s): %s", ids["snapshot_restore_job_id"], err))
 	}
 
-	if err = d.Set("expired", snapshotReq.Expired); err != nil {
+	if err := d.Set("expired", snapshotReq.Expired); err != nil {
 		return diag.FromErr(fmt.Errorf("error setting `expired` for cloudProviderSnapshotRestoreJob (%s): %s", ids["snapshot_restore_job_id"], err))
 	}
 
-	if err = d.Set("expires_at", snapshotReq.ExpiresAt); err != nil {
+	if err := d.Set("expires_at", snapshotReq.ExpiresAt); err != nil {
 		return diag.FromErr(fmt.Errorf("error setting `expires_at` for cloudProviderSnapshotRestoreJob (%s): %s", ids["snapshot_restore_job_id"], err))
 	}
 
-	if err = d.Set("finished_at", snapshotReq.FinishedAt); err != nil {
+	if err := d.Set("finished_at", snapshotReq.FinishedAt); err != nil {
 		return diag.FromErr(fmt.Errorf("error setting `Finished_at` for cloudProviderSnapshotRestoreJob (%s): %s", ids["snapshot_restore_job_id"], err))
 	}
 
-	if err = d.Set("timestamp", snapshotReq.Timestamp); err != nil {
+	if err := d.Set("timestamp", snapshotReq.Timestamp); err != nil {
 		return diag.FromErr(fmt.Errorf("error setting `timestamp` for cloudProviderSnapshotRestoreJob (%s): %s", ids["snapshot_restore_job_id"], err))
 	}
 
-	if err = d.Set("snapshot_restore_job_id", snapshotReq.ID); err != nil {
+	if err := d.Set("snapshot_restore_job_id", snapshotReq.ID); err != nil {
 		return diag.FromErr(fmt.Errorf("error setting `snapshot_restore_job_id` for cloudProviderSnapshotRestoreJob (%s): %s", ids["snapshot_restore_job_id"], err))
 	}
 
@@ -333,7 +365,7 @@ func resourceMongoDBAtlasCloudBackupSnapshotRestoreJobDelete(ctx context.Context
 func resourceMongoDBAtlasCloudBackupSnapshotRestoreJobImportState(ctx context.Context, d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
 	conn := meta.(*MongoDBClient).Atlas
 
-	projectID, clusterName, snapshotJobID, err := splitSnapshotRestoreJobImportID(d.Id())
+	projectID, clusterName, snapshotJobID, deploymentType, err := splitSnapshotRestoreJobImportID(d.Id())
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +376,15 @@ func resourceMongoDBAtlasCloudBackupSnapshotRestoreJobImportState(ctx context.Co
 		JobID:       *snapshotJobID,
 	}
 
-	u, _, err := conn.CloudProviderSnapshotRestoreJobs.Get(ctx, requestParameters)
+	u := &matlas.CloudProviderSnapshotRestoreJob{}
+
+	switch *deploymentType {
+	case "SERVERLESS":
+		u, _, err = conn.CloudProviderSnapshotRestoreJobs.GetForServerlessBackupRestore(ctx, *projectID, *clusterName, requestParameters.JobID)
+	default:
+		u, _, err = conn.CloudProviderSnapshotRestoreJobs.Get(ctx, requestParameters)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("couldn't import cloudProviderSnapshotRestoreJob %s in project %s, error: %s", requestParameters.ClusterName, requestParameters.GroupID, err)
 	}
@@ -359,6 +399,10 @@ func resourceMongoDBAtlasCloudBackupSnapshotRestoreJobImportState(ctx context.Co
 
 	if err := d.Set("snapshot_id", u.SnapshotID); err != nil {
 		log.Printf("[WARN] Error setting snapshot_id for (%s): %s", d.Id(), err)
+	}
+
+	if err := d.Set("deployment_type", *deploymentType); err != nil {
+		log.Printf("[WARN] Error setting deployment_type for (%s): %s", d.Id(), err)
 	}
 
 	deliveryType := make(map[string]interface{})
@@ -388,23 +432,25 @@ func resourceMongoDBAtlasCloudBackupSnapshotRestoreJobImportState(ctx context.Co
 		"project_id":              *projectID,
 		"cluster_name":            *clusterName,
 		"snapshot_restore_job_id": *snapshotJobID,
+		"deployment_type":         *deploymentType,
 	}))
 
 	return []*schema.ResourceData{d}, nil
 }
 
-func splitSnapshotRestoreJobImportID(id string) (projectID, clusterName, snapshotJobID *string, err error) {
-	var re = regexp.MustCompile(`(?s)^([0-9a-fA-F]{24})-(.*)-([0-9a-fA-F]{24})$`)
+func splitSnapshotRestoreJobImportID(id string) (projectID, clusterName, snapshotJobID, deploymentType *string, err error) {
+	var re = regexp.MustCompile(`(?s)^([0-9a-fA-F]{24})-(.*)-([0-9a-fA-F]{24})-(.*)$`)
 	parts := re.FindStringSubmatch(id)
 
-	if len(parts) != 4 {
-		err = errors.New("import format error: to import a cloudProviderSnapshotRestoreJob, use the format {project_id}-{cluster_name}-{snapshot_restore_job_id}")
+	if len(parts) != 5 {
+		err = errors.New("import format error: to import a cloudProviderSnapshotRestoreJob, use the format {project_id}-{cluster_name}-{snapshot_restore_job_id}-{deployment_type}")
 		return
 	}
 
 	projectID = &parts[1]
 	clusterName = &parts[2]
 	snapshotJobID = &parts[3]
+	deploymentType = &parts[4]
 
 	return
 }
