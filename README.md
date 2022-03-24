@@ -1,4 +1,6 @@
 # MongoDB Atlas Provider
+
+
 [![Automated Tests](https://github.com/mongodb/terraform-provider-mongodbatlas/actions/workflows/automated-test.yml/badge.svg)](https://github.com/mongodb/terraform-provider-mongodbatlas/actions/workflows/automated-test.yml)
 [![Automated Acceptances Tests](https://github.com/mongodb/terraform-provider-mongodbatlas/actions/workflows/automated-test-acceptances.yml/badge.svg)](https://github.com/mongodb/terraform-provider-mongodbatlas/actions/workflows/automated-test-acceptances.yml)
 
